@@ -6,13 +6,13 @@
 1. Fork this repo
 2. Go to streamlit.io/cloud
 3. Connect GitHub repo
-4. Add `ANTHROPIC_API_KEY` in secrets
+4. Add `GROQ_API_KEY` in secrets
 5. Deploy!
 
 ## Features:
 - Single-page AI Assessment Generator
 - Customizable Grade, Subjects, Topics, and Difficulty levels
-- Real-time generation with Claude (claude-sonnet-4-20250514)
+- Real-time generation with Groq AI (Llama 3 models)
 - Clean exam paper layout with dynamic difficulty badges
 - Automatic PDF formatting and export using ReportLab
 - Fully mobile responsive design
@@ -21,7 +21,7 @@
 ## Tech Stack: 
 - Streamlit
 - Python
-- Anthropic Claude
+- Groq API
 - ReportLab
 - PyPDF2
 
@@ -34,5 +34,5 @@ Step by step:
 4. Select repo: Himanivashisht03/vedaai
 5. Branch: main
 6. Main file: app.py
-7. Click "Advanced settings" → add secret: ANTHROPIC_API_KEY = "sk-ant-..."
+7. Click "Advanced settings" → add secret: GROQ_API_KEY = "gsk_..."
 8. Click Deploy!
