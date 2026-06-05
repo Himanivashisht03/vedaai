@@ -1,5 +1,5 @@
 import streamlit as st
-import anthropic
+from groq import Groq
 import json
 import time
 import io
@@ -57,7 +57,7 @@ def extract_text_from_file(uploaded_file) -> str:
 def generate_pdf(paper_data: dict) -> io.BytesIO:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
-    
+
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(name='CenterTitle', parent=styles['Heading1'], alignment=TA_CENTER, spaceAfter=12)
     meta_style = ParagraphStyle(name='Meta', parent=styles['Normal'], alignment=TA_CENTER, spaceAfter=20)
@@ -65,130 +65,137 @@ def generate_pdf(paper_data: dict) -> io.BytesIO:
     instruction_style = ParagraphStyle(name='Instruction', parent=styles['Italic'], spaceAfter=15)
     question_style = ParagraphStyle(name='Question', parent=styles['Normal'], spaceAfter=5, leading=14)
     option_style = ParagraphStyle(name='Option', parent=styles['Normal'], leftIndent=20, spaceAfter=2, leading=12)
-    
+
     story = []
-    
+
     # Header
     story.append(Paragraph(f"<b>{paper_data.get('title', 'Assessment Paper')}</b>", title_style))
-    
+
     meta_text = (f"<b>Subject:</b> {paper_data.get('subject', '')} &nbsp;&nbsp;&nbsp;&nbsp; "
                  f"<b>Grade:</b> {paper_data.get('grade', '')} &nbsp;&nbsp;&nbsp;&nbsp; "
                  f"<b>Total Marks:</b> {paper_data.get('totalMarks', '')} &nbsp;&nbsp;&nbsp;&nbsp; "
                  f"<b>Time:</b> {paper_data.get('timeAllowed', '')}")
     story.append(Paragraph(meta_text, meta_style))
-    
+
     # Student Info
     student_info = ("Name: ____________________________________ &nbsp;&nbsp;&nbsp;&nbsp; "
                     "Roll No: _______________ &nbsp;&nbsp;&nbsp;&nbsp; "
                     "Section: _______________")
     story.append(Paragraph(student_info, styles['Normal']))
     story.append(Spacer(1, 30))
-    
+
     # Sections
     for section in paper_data.get('sections', []):
         story.append(Paragraph(f"<b>Section {section.get('sectionLabel', '')}: {section.get('sectionTitle', '')}</b>", section_title_style))
         if section.get('instruction'):
             story.append(Paragraph(section.get('instruction', ''), instruction_style))
-            
+
         for q in section.get('questions', []):
             q_text = f"<b>Q{q.get('questionNumber', '')}.</b> {q.get('text', '')}"
             marks = q.get('marks', '')
             if marks:
                 q_text += f" <b>[{marks}]</b>"
-                
+
             story.append(Paragraph(q_text, question_style))
-            
+
             for opt in q.get('options', []):
                 story.append(Paragraph(opt, option_style))
-                
+
             story.append(Spacer(1, 10))
-            
+
     doc.build(story)
     buffer.seek(0)
     return buffer
 
 def call_ai(prompt: str, retries=1) -> dict:
-    if "ANTHROPIC_API_KEY" not in st.secrets:
-        raise ValueError("ANTHROPIC_API_KEY not found in Streamlit secrets.")
-        
-    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-    
-    for attempt in range(retries + 1):
-        try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4000,
-                temperature=0.7,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            content = response.content[0].text.strip()
-            
-            # Clean possible markdown formatting
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.endswith("```"):
-                content = content[:-3]
-                
-            return json.loads(content)
-        except Exception as e:
-            if attempt == retries:
-                # Safe fallback if the specific model isn't available
-                try:
-                    response = client.messages.create(
-                        model="claude-3-5-sonnet-20241022",
-                        max_tokens=4000,
-                        temperature=0.7,
-                        messages=[{"role": "user", "content": prompt + "\nEnsure you respond with ONLY pure JSON. No markdown."}]
-                    )
-                    content = response.content[0].text.strip()
-                    if content.startswith("```json"):
-                        content = content[7:]
-                    if content.endswith("```"):
-                        content = content[:-3]
-                    return json.loads(content)
-                except Exception as final_e:
-                    raise Exception(f"AI Generation failed: {str(final_e)}")
-            time.sleep(1)
+    if "GROQ_API_KEY" not in st.secrets:
+        raise ValueError("GROQ_API_KEY not found in Streamlit secrets.")
+
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+    models_to_try = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+    ]
+
+    last_error = None
+    for model in models_to_try:
+        for attempt in range(retries + 1):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    max_tokens=4000,
+                    temperature=0.7,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert AI teacher. Always respond with ONLY valid raw JSON. No markdown, no backticks, no explanation."
+                        },
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                content = response.choices[0].message.content.strip()
+
+                # Clean possible markdown formatting
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+
+                return json.loads(content.strip())
+
+            except json.JSONDecodeError as e:
+                last_error = f"JSON parse error with model {model}: {e}"
+                if attempt == retries:
+                    break
+                time.sleep(1)
+            except Exception as e:
+                last_error = f"API error with model {model}: {e}"
+                break  # Try next model
+
+    raise Exception(f"AI Generation failed after trying all models. Last error: {last_error}")
 
 def render_create_page():
     st.title("📝 VedaAI Assessment Creator")
     st.markdown("Create professional AI-generated assessment papers in seconds.")
-    
+
     with st.form("assessment_form"):
         col1, col2 = st.columns(2)
-        
+
         with col1:
             subject = st.text_input("Subject *", placeholder="e.g. Science, Mathematics")
             grade = st.selectbox("Grade Level *", [f"Grade {i}" for i in range(6, 13)])
             total_marks = st.number_input("Total Marks *", min_value=1, value=50)
             time_allowed = st.selectbox("Time Allowed *", ["30 min", "1 hour", "2 hours", "3 hours"])
-            
+
         with col2:
             topic = st.text_input("Topic *", placeholder="e.g. Thermodynamics, Algebra")
             difficulty = st.selectbox("Difficulty *", ["Mixed", "Easy", "Medium", "Hard"])
             num_questions = st.slider("Number of Questions *", min_value=1, max_value=50, value=10)
-            question_types = st.multiselect("Question Types *", 
+            question_types = st.multiselect("Question Types *",
                 ["MCQ", "Short Answer", "Long Answer", "True/False", "Fill in the Blank"],
                 default=["MCQ", "Short Answer"])
-                
+
         additional_instructions = st.text_area("Additional Instructions (Optional)", placeholder="Any specific requirements?")
         uploaded_file = st.file_uploader("Upload Reference Material (Optional)", type=["pdf", "txt"])
-        
+
         submitted = st.form_submit_button("Generate Assessment ✨", type="primary", use_container_width=True)
-        
+
         if submitted:
             if not subject or not topic or not question_types:
                 st.error("Please fill in all required fields marked with (*).")
                 return
-                
-            with st.spinner("🧠 VedaAI is crafting your assessment... Please wait."):
+
+            with st.spinner("🚀 VedaAI is crafting your assessment... Please wait."):
                 progress_bar = st.progress(0)
-                
+
                 progress_bar.progress(10, text="Reading reference material...")
                 ref_text = extract_text_from_file(uploaded_file)
-                
-                progress_bar.progress(30, text="Prompting Claude AI...")
-                
+
+                progress_bar.progress(30, text="Prompting Groq AI...")
+
                 prompt = f"""You are an expert AI teacher. Generate an assessment with the following specifications:
                 - Subject: {subject}
                 - Topic: {topic}
@@ -199,14 +206,14 @@ def render_create_page():
                 - Question Types: {', '.join(question_types)}
                 - Time Allowed: {time_allowed}
                 - Additional Instructions: {additional_instructions}
-                
+
                 Reference Material (if any):
                 {ref_text}
-                
-                Return ONLY a valid JSON object matching this exact schema. Do not include any markdown formatting like ```json, just the raw JSON text:
+
+                Return ONLY a valid JSON object matching this exact schema. Do not include any markdown formatting, just the raw JSON text:
                 {{
                   "title": "Assessment Title",
-                  "subject": "{subject}", 
+                  "subject": "{subject}",
                   "grade": "{grade}",
                   "totalMarks": {total_marks},
                   "timeAllowed": "{time_allowed}",
@@ -229,13 +236,13 @@ def render_create_page():
                     }}
                   ]
                 }}"""
-                
+
                 try:
-                    progress_bar.progress(50, text="Generating content (this may take up to a minute)...")
+                    progress_bar.progress(50, text="Generating content...")
                     paper_data = call_ai(prompt, retries=1)
-                    
+
                     progress_bar.progress(90, text="Finalizing paper format...")
-                    
+
                     st.session_state.generated_paper = paper_data
                     progress_bar.progress(100, text="Done!")
                     time.sleep(0.5)
@@ -256,7 +263,7 @@ def render_view_page():
     if not paper:
         st.session_state.page = 'create'
         st.rerun()
-        
+
     # Actions Bar
     col1, col2, col3 = st.columns([1, 1, 4])
     with col1:
@@ -273,9 +280,9 @@ def render_view_page():
             type="primary",
             use_container_width=True
         )
-        
+
     st.markdown("<br>", unsafe_allow_html=True)
-        
+
     # Paper Display
     st.markdown(f"""
         <div class="paper-header">
@@ -293,18 +300,18 @@ def render_view_page():
             </div>
         </div>
     """, unsafe_allow_html=True)
-    
+
     for section in paper.get('sections', []):
         st.markdown(f"""
             <div class="section-card">
                 <h3 style="margin-top:0; color:#111827;">Section {section.get('sectionLabel', '')}: {section.get('sectionTitle', '')}</h3>
                 <p style="color:#4b5563; font-style:italic; margin-bottom: 24px;">{section.get('instruction', '')}</p>
         """, unsafe_allow_html=True)
-        
+
         for q in section.get('questions', []):
             diff_class = get_difficulty_class(q.get('difficulty', 'Moderate'))
             diff_label = q.get('difficulty', 'Moderate')
-            
+
             st.markdown(f"""
                 <div class="q-row">
                     <div class="q-text"><b>Q{q.get('questionNumber', '')}.</b> {q.get('text', '')}</div>
@@ -314,12 +321,12 @@ def render_view_page():
                     </div>
                 </div>
             """, unsafe_allow_html=True)
-            
+
             options = q.get('options', [])
             if options:
                 opts_html = "".join([f"<div class='q-option-item'>{opt}</div>" for opt in options])
                 st.markdown(f"<div class='q-options'>{opts_html}</div>", unsafe_allow_html=True)
-                
+
         st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
